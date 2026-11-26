@@ -1,0 +1,801 @@
+/**
+ * Token-only (lexer) JavaCC grammar for PostgreSQL SQL / PL/pgSQL / psql scripts, used by CPD.
+ *
+ * No parser is generated (BUILD_PARSER=false). The unquoted keywords were generated from
+ * PostgreSQL's src/include/parser/kwlist.h (REL_19_STABLE), see the KEYWORDS section below.
+ *
+ * Lexical states:
+ *
+ *   DEFAULT               Plain SQL, and psql scripts.
+ *   IN_DOLLAR_BODY        Inside a dollar-quoted string ($$ ... $$ or $tag$ ... $tag$). The body is tokenized as
+ *                         SQL, so that CPD can find duplicates inside PL/pgSQL function bodies. Like psql, we do not
+ *                         recognize backslash commands or COPY data in there. Only the same tag closes the body;
+ *                         other tags inside are ordinary tokens (dollar-quoted strings do not nest in PostgreSQL).
+ *   IN_BLOCK_COMMENT      Block comments, which nest in PostgreSQL (unlike in Oracle).
+ *   IN_PSQL_COMMAND       Arguments of a psql backslash meta-command (\c, \d+, \set, \copy, ...). Ends at the end of
+ *                         the line or at the next unquoted double-backslash.
+ *   IN_COPY_DATA*         Inline data of COPY ... FROM STDIN (or \copy ... from stdin), up to a line holding "\.".
+ *                         The data is skipped entirely.
+ *
+ * The state flags in TOKEN_MGR_DECLS are only updated by the token actions of a handful of tokens (COPY, STDIN, ';',
+ * dollar quotes, psql commands and words, end of line).
+ */
+options {
+  BUILD_PARSER=false;
+  CACHE_TOKENS=true;
+  UNICODE_INPUT=true;
+  IGNORE_CASE=true;
+}
+
+PARSER_BEGIN(PostgreSQLParserImpl)
+package net.sourceforge.pmd.lang.postgresql.ast;
+
+public class PostgreSQLParserImpl {
+
+}
+
+PARSER_END(PostgreSQLParserImpl)
+
+TOKEN_MGR_DECLS :
+{
+    /** Nesting depth of the block comment being read. */
+    private int commentDepth = 0;
+    /** The tag (eg "$$" or "$body$") of the dollar-quoted string we're in, null if not in one. */
+    private String dollarTag = null;
+    /** A COPY keyword was seen in the current statement. */
+    private boolean sawCopy = false;
+    /** A STDIN keyword was seen in a statement with a COPY keyword. */
+    private boolean sawStdin = false;
+    /** The current psql command is \copy. */
+    private boolean inCopyCommand = false;
+    /** Inline COPY data starts after the next end of line. */
+    private boolean copyDataPending = false;
+}
+
+/* ---- WHITESPACE ---- */
+
+<DEFAULT, IN_DOLLAR_BODY, IN_PSQL_COMMAND> SKIP :
+{
+  " "
+| "\t"
+| "\f"
+}
+
+<DEFAULT, IN_DOLLAR_BODY> SKIP :
+{
+  <EOL: "\r\n" | "\n" | "\r">
+  {
+    if (copyDataPending && dollarTag == null) {
+      copyDataPending = false;
+      SwitchTo(IN_COPY_DATA_START);
+    }
+  }
+}
+
+/* ---- COMMENTS ---- */
+
+<DEFAULT, IN_DOLLAR_BODY> SPECIAL_TOKEN :
+{
+  <SINGLE_LINE_COMMENT: "--" (~["\r", "\n"])*>
+}
+
+<DEFAULT, IN_DOLLAR_BODY> MORE :
+{
+  "/*" { commentDepth = 1; } : IN_BLOCK_COMMENT
+}
+
+<IN_BLOCK_COMMENT> MORE :
+{
+  "/*" { commentDepth++; }
+| "*/"
+  {
+    commentDepth--;
+    if (commentDepth == 0) {
+      // un-read the closing delimiter, it's read again as the final token
+      input_stream.backup(2);
+      SwitchTo(IN_BLOCK_COMMENT_END);
+    }
+  }
+| < ~[] >
+}
+
+<IN_BLOCK_COMMENT_END> SPECIAL_TOKEN :
+{
+  <BLOCK_COMMENT: "*/"> { SwitchTo(dollarTag == null ? DEFAULT : IN_DOLLAR_BODY); }
+}
+
+/* ---- COPY ... FROM STDIN inline data ---- */
+
+<IN_COPY_DATA_START> SKIP :
+{
+  // the first line of data is already the end marker
+  <COPY_DATA_EMPTY_END: "\\." ([" ", "\t"])* ("\r\n" | "\n" | "\r")?> : DEFAULT
+| < ~[] > : IN_COPY_DATA
+}
+
+<IN_COPY_DATA> SKIP :
+{
+  <COPY_DATA_END: ("\r\n" | "\n" | "\r") "\\." ([" ", "\t"])* ("\r\n" | "\n" | "\r")?> : DEFAULT
+| < ~[] >
+}
+
+/* ---- PSQL BACKSLASH COMMANDS ---- */
+
+<DEFAULT> TOKEN :
+{
+  // eg \c \d+ \dt \set \copy \if \! \;
+  <PSQL_COMMAND: "\\" (~[" ", "\t", "\f", "\r", "\n", "\\", "'", "\"", "`"])+>
+  { inCopyCommand = matchedToken.getImage().equals("\\copy"); } : IN_PSQL_COMMAND
+}
+
+<DEFAULT, IN_PSQL_COMMAND> TOKEN :
+{
+  // ends the current command, the rest of the line is processed as a new input
+  <PSQL_SEPARATOR: "\\\\"> { inCopyCommand = false; } : DEFAULT
+}
+
+<IN_PSQL_COMMAND> SKIP :
+{
+  <PSQL_EOL: "\r\n" | "\n" | "\r">
+  {
+    inCopyCommand = false;
+    if (copyDataPending) {
+      copyDataPending = false;
+      SwitchTo(IN_COPY_DATA_START);
+    } else {
+      SwitchTo(DEFAULT);
+    }
+  }
+}
+
+<DEFAULT, IN_PSQL_COMMAND> TOKEN :
+{
+  // :name  :'name'  :"name"  :{?name}
+  <PSQL_VARIABLE:
+      ":" <ID_START> (<ID_CONT_NO_DOLLAR>)*
+    | ":'" (~["'", "\r", "\n"])+ "'"
+    | ":\"" (~["\"", "\r", "\n"])+ "\""
+    | ":{?" (<ID_CONT_NO_DOLLAR>)+ "}"
+  >
+}
+
+<IN_PSQL_COMMAND> TOKEN :
+{
+  <PSQL_STRING: "'" (~["'", "\\", "\r", "\n"] | "\\" ~["\r", "\n"] | "''")* "'">
+| <PSQL_QUOTED: "\"" (~["\"", "\r", "\n"] | "\"\"")* "\"">
+| <PSQL_BACKTICK: "`" (~["`", "\r", "\n"])* "`">
+| <PSQL_WORD: (~[" ", "\t", "\f", "\r", "\n", "\\", "'", "\"", "`", ";"])+>
+  {
+    if (inCopyCommand) {
+      String word = matchedToken.getImage();
+      if (word.equalsIgnoreCase("stdin") || word.equalsIgnoreCase("pstdin")) {
+        copyDataPending = true;
+      }
+    }
+  }
+}
+
+/* ---- PUNCTUATION ---- */
+
+<DEFAULT, IN_DOLLAR_BODY, IN_PSQL_COMMAND> TOKEN :
+{
+  <SEMICOLON: ";">
+  {
+    if (dollarTag == null) {
+      if (sawCopy && sawStdin) {
+        copyDataPending = true;
+      }
+      sawCopy = false;
+      sawStdin = false;
+    }
+  }
+}
+
+<DEFAULT, IN_DOLLAR_BODY> TOKEN :
+{
+  <LPAREN: "(">
+| <RPAREN: ")">
+| <LBRACKET: "[">
+| <RBRACKET: "]">
+| <COMMA: ",">
+| <DOT: ".">
+| <DOTDOT: "..">
+| <COLON: ":">
+}
+
+/*
+ * Operators. Only the common multi-character ones are listed, other sequences of operator characters are split into
+ * single-character tokens. This is fine for CPD, and it makes sure the start of a comment ("--" or "/*") is never
+ * swallowed by an operator.
+ */
+<DEFAULT, IN_DOLLAR_BODY> TOKEN :
+{
+  <OPERATOR:
+      "::" | ":=" | "=>" | "->" | "->>" | "#>" | "#>>" | "#-" | "@>" | "<@" | "||" | "&&"
+    | "!=" | "<>" | "<=" | ">=" | "<<" | ">>" | "@@" | "@?" | "?|" | "?&" | "<->"
+    | "~~" | "~~*" | "!~~" | "!~~*" | "!~" | "!~*" | "~*"
+    | ["+", "-", "*", "/", "<", ">", "=", "~", "!", "@", "#", "%", "^", "&", "|", "?"]
+  >
+}
+
+/* ---- DOLLAR QUOTING ---- */
+
+<DEFAULT, IN_DOLLAR_BODY> TOKEN :
+{
+  // $$  $tag$
+  <DOLLAR_QUOTE: "$" (<ID_START_NO_DOLLAR> (<ID_CONT_NO_DOLLAR>)*)? "$">
+  {
+    String tag = matchedToken.getImage();
+    if (dollarTag == null) {
+      dollarTag = tag;
+      SwitchTo(IN_DOLLAR_BODY);
+    } else if (dollarTag.equals(tag)) {
+      dollarTag = null;
+      SwitchTo(DEFAULT);
+    }
+  }
+}
+
+/* ---- KEYWORDS ---- */
+
+<DEFAULT, IN_DOLLAR_BODY> TOKEN :
+{
+  <K_ABORT: "abort">
+| <K_ABSENT: "absent">
+| <K_ABSOLUTE: "absolute">
+| <K_ACCESS: "access">
+| <K_ACTION: "action">
+| <K_ADD: "add">
+| <K_ADMIN: "admin">
+| <K_AFTER: "after">
+| <K_AGGREGATE: "aggregate">
+| <K_ALL: "all">
+| <K_ALSO: "also">
+| <K_ALTER: "alter">
+| <K_ALWAYS: "always">
+| <K_ANALYSE: "analyse">
+| <K_ANALYZE: "analyze">
+| <K_AND: "and">
+| <K_ANY: "any">
+| <K_ARRAY: "array">
+| <K_AS: "as">
+| <K_ASC: "asc">
+| <K_ASENSITIVE: "asensitive">
+| <K_ASSERTION: "assertion">
+| <K_ASSIGNMENT: "assignment">
+| <K_ASYMMETRIC: "asymmetric">
+| <K_AT: "at">
+| <K_ATOMIC: "atomic">
+| <K_ATTACH: "attach">
+| <K_ATTRIBUTE: "attribute">
+| <K_AUTHORIZATION: "authorization">
+| <K_BACKWARD: "backward">
+| <K_BEFORE: "before">
+| <K_BEGIN: "begin">
+| <K_BETWEEN: "between">
+| <K_BIGINT: "bigint">
+| <K_BINARY: "binary">
+| <K_BIT: "bit">
+| <K_BOOLEAN: "boolean">
+| <K_BOTH: "both">
+| <K_BREADTH: "breadth">
+| <K_BY: "by">
+| <K_CACHE: "cache">
+| <K_CALL: "call">
+| <K_CALLED: "called">
+| <K_CASCADE: "cascade">
+| <K_CASCADED: "cascaded">
+| <K_CASE: "case">
+| <K_CAST: "cast">
+| <K_CATALOG: "catalog">
+| <K_CHAIN: "chain">
+| <K_CHAR: "char">
+| <K_CHARACTER: "character">
+| <K_CHARACTERISTICS: "characteristics">
+| <K_CHECK: "check">
+| <K_CHECKPOINT: "checkpoint">
+| <K_CLASS: "class">
+| <K_CLOSE: "close">
+| <K_CLUSTER: "cluster">
+| <K_COALESCE: "coalesce">
+| <K_COLLATE: "collate">
+| <K_COLLATION: "collation">
+| <K_COLUMN: "column">
+| <K_COLUMNS: "columns">
+| <K_COMMENT: "comment">
+| <K_COMMENTS: "comments">
+| <K_COMMIT: "commit">
+| <K_COMMITTED: "committed">
+| <K_COMPRESSION: "compression">
+| <K_CONCURRENTLY: "concurrently">
+| <K_CONDITIONAL: "conditional">
+| <K_CONFIGURATION: "configuration">
+| <K_CONFLICT: "conflict">
+| <K_CONNECTION: "connection">
+| <K_CONSTRAINT: "constraint">
+| <K_CONSTRAINTS: "constraints">
+| <K_CONTENT: "content">
+| <K_CONTINUE: "continue">
+| <K_CONVERSION: "conversion">
+| <K_COPY: "copy"> { if (dollarTag == null) { sawCopy = true; } }
+| <K_COST: "cost">
+| <K_CREATE: "create">
+| <K_CROSS: "cross">
+| <K_CSV: "csv">
+| <K_CUBE: "cube">
+| <K_CURRENT: "current">
+| <K_CURRENT_CATALOG: "current_catalog">
+| <K_CURRENT_DATE: "current_date">
+| <K_CURRENT_ROLE: "current_role">
+| <K_CURRENT_SCHEMA: "current_schema">
+| <K_CURRENT_TIME: "current_time">
+| <K_CURRENT_TIMESTAMP: "current_timestamp">
+| <K_CURRENT_USER: "current_user">
+| <K_CURSOR: "cursor">
+| <K_CYCLE: "cycle">
+| <K_DATA: "data">
+| <K_DATABASE: "database">
+| <K_DAY: "day">
+| <K_DEALLOCATE: "deallocate">
+| <K_DEC: "dec">
+| <K_DECIMAL: "decimal">
+| <K_DECLARE: "declare">
+| <K_DEFAULT: "default">
+| <K_DEFAULTS: "defaults">
+| <K_DEFERRABLE: "deferrable">
+| <K_DEFERRED: "deferred">
+| <K_DEFINER: "definer">
+| <K_DELETE: "delete">
+| <K_DELIMITER: "delimiter">
+| <K_DELIMITERS: "delimiters">
+| <K_DEPENDS: "depends">
+| <K_DEPTH: "depth">
+| <K_DESC: "desc">
+| <K_DETACH: "detach">
+| <K_DICTIONARY: "dictionary">
+| <K_DISABLE: "disable">
+| <K_DISCARD: "discard">
+| <K_DISTINCT: "distinct">
+| <K_DO: "do">
+| <K_DOCUMENT: "document">
+| <K_DOMAIN: "domain">
+| <K_DOUBLE: "double">
+| <K_DROP: "drop">
+| <K_EACH: "each">
+| <K_ELSE: "else">
+| <K_EMPTY: "empty">
+| <K_ENABLE: "enable">
+| <K_ENCODING: "encoding">
+| <K_ENCRYPTED: "encrypted">
+| <K_END: "end">
+| <K_ENFORCED: "enforced">
+| <K_ENUM: "enum">
+| <K_ERROR: "error">
+| <K_ESCAPE: "escape">
+| <K_EVENT: "event">
+| <K_EXCEPT: "except">
+| <K_EXCLUDE: "exclude">
+| <K_EXCLUDING: "excluding">
+| <K_EXCLUSIVE: "exclusive">
+| <K_EXECUTE: "execute">
+| <K_EXISTS: "exists">
+| <K_EXPLAIN: "explain">
+| <K_EXPRESSION: "expression">
+| <K_EXTENSION: "extension">
+| <K_EXTERNAL: "external">
+| <K_EXTRACT: "extract">
+| <K_FALSE: "false">
+| <K_FAMILY: "family">
+| <K_FETCH: "fetch">
+| <K_FILTER: "filter">
+| <K_FINALIZE: "finalize">
+| <K_FIRST: "first">
+| <K_FLOAT: "float">
+| <K_FOLLOWING: "following">
+| <K_FOR: "for">
+| <K_FORCE: "force">
+| <K_FOREIGN: "foreign">
+| <K_FORMAT: "format">
+| <K_FORWARD: "forward">
+| <K_FREEZE: "freeze">
+| <K_FROM: "from">
+| <K_FULL: "full">
+| <K_FUNCTION: "function">
+| <K_FUNCTIONS: "functions">
+| <K_GENERATED: "generated">
+| <K_GLOBAL: "global">
+| <K_GRANT: "grant">
+| <K_GRANTED: "granted">
+| <K_GREATEST: "greatest">
+| <K_GROUP: "group">
+| <K_GROUPING: "grouping">
+| <K_GROUPS: "groups">
+| <K_HANDLER: "handler">
+| <K_HAVING: "having">
+| <K_HEADER: "header">
+| <K_HOLD: "hold">
+| <K_HOUR: "hour">
+| <K_IDENTITY: "identity">
+| <K_IF: "if">
+| <K_IGNORE: "ignore">
+| <K_ILIKE: "ilike">
+| <K_IMMEDIATE: "immediate">
+| <K_IMMUTABLE: "immutable">
+| <K_IMPLICIT: "implicit">
+| <K_IMPORT: "import">
+| <K_IN: "in">
+| <K_INCLUDE: "include">
+| <K_INCLUDING: "including">
+| <K_INCREMENT: "increment">
+| <K_INDENT: "indent">
+| <K_INDEX: "index">
+| <K_INDEXES: "indexes">
+| <K_INHERIT: "inherit">
+| <K_INHERITS: "inherits">
+| <K_INITIALLY: "initially">
+| <K_INLINE: "inline">
+| <K_INNER: "inner">
+| <K_INOUT: "inout">
+| <K_INPUT: "input">
+| <K_INSENSITIVE: "insensitive">
+| <K_INSERT: "insert">
+| <K_INSTEAD: "instead">
+| <K_INT: "int">
+| <K_INTEGER: "integer">
+| <K_INTERSECT: "intersect">
+| <K_INTERVAL: "interval">
+| <K_INTO: "into">
+| <K_INVOKER: "invoker">
+| <K_IS: "is">
+| <K_ISNULL: "isnull">
+| <K_ISOLATION: "isolation">
+| <K_JOIN: "join">
+| <K_JSON: "json">
+| <K_JSON_ARRAY: "json_array">
+| <K_JSON_ARRAYAGG: "json_arrayagg">
+| <K_JSON_EXISTS: "json_exists">
+| <K_JSON_OBJECT: "json_object">
+| <K_JSON_OBJECTAGG: "json_objectagg">
+| <K_JSON_QUERY: "json_query">
+| <K_JSON_SCALAR: "json_scalar">
+| <K_JSON_SERIALIZE: "json_serialize">
+| <K_JSON_TABLE: "json_table">
+| <K_JSON_VALUE: "json_value">
+| <K_KEEP: "keep">
+| <K_KEY: "key">
+| <K_KEYS: "keys">
+| <K_LABEL: "label">
+| <K_LANGUAGE: "language">
+| <K_LARGE: "large">
+| <K_LAST: "last">
+| <K_LATERAL: "lateral">
+| <K_LEADING: "leading">
+| <K_LEAKPROOF: "leakproof">
+| <K_LEAST: "least">
+| <K_LEFT: "left">
+| <K_LEVEL: "level">
+| <K_LIKE: "like">
+| <K_LIMIT: "limit">
+| <K_LISTEN: "listen">
+| <K_LOAD: "load">
+| <K_LOCAL: "local">
+| <K_LOCALTIME: "localtime">
+| <K_LOCALTIMESTAMP: "localtimestamp">
+| <K_LOCATION: "location">
+| <K_LOCK: "lock">
+| <K_LOCKED: "locked">
+| <K_LOGGED: "logged">
+| <K_LSN: "lsn">
+| <K_MAPPING: "mapping">
+| <K_MATCH: "match">
+| <K_MATCHED: "matched">
+| <K_MATERIALIZED: "materialized">
+| <K_MAXVALUE: "maxvalue">
+| <K_MERGE: "merge">
+| <K_MERGE_ACTION: "merge_action">
+| <K_METHOD: "method">
+| <K_MINUTE: "minute">
+| <K_MINVALUE: "minvalue">
+| <K_MODE: "mode">
+| <K_MONTH: "month">
+| <K_MOVE: "move">
+| <K_NAME: "name">
+| <K_NAMES: "names">
+| <K_NATIONAL: "national">
+| <K_NATURAL: "natural">
+| <K_NCHAR: "nchar">
+| <K_NESTED: "nested">
+| <K_NEW: "new">
+| <K_NEXT: "next">
+| <K_NFC: "nfc">
+| <K_NFD: "nfd">
+| <K_NFKC: "nfkc">
+| <K_NFKD: "nfkd">
+| <K_NO: "no">
+| <K_NONE: "none">
+| <K_NORMALIZE: "normalize">
+| <K_NORMALIZED: "normalized">
+| <K_NOT: "not">
+| <K_NOTHING: "nothing">
+| <K_NOTIFY: "notify">
+| <K_NOTNULL: "notnull">
+| <K_NOWAIT: "nowait">
+| <K_NULL: "null">
+| <K_NULLIF: "nullif">
+| <K_NULLS: "nulls">
+| <K_NUMERIC: "numeric">
+| <K_OBJECT: "object">
+| <K_OBJECTS: "objects">
+| <K_OF: "of">
+| <K_OFF: "off">
+| <K_OFFSET: "offset">
+| <K_OIDS: "oids">
+| <K_OLD: "old">
+| <K_OMIT: "omit">
+| <K_ON: "on">
+| <K_ONLY: "only">
+| <K_OPERATOR: "operator">
+| <K_OPTION: "option">
+| <K_OPTIONS: "options">
+| <K_OR: "or">
+| <K_ORDER: "order">
+| <K_ORDINALITY: "ordinality">
+| <K_OTHERS: "others">
+| <K_OUT: "out">
+| <K_OUTER: "outer">
+| <K_OVER: "over">
+| <K_OVERLAPS: "overlaps">
+| <K_OVERLAY: "overlay">
+| <K_OVERRIDING: "overriding">
+| <K_OWNED: "owned">
+| <K_OWNER: "owner">
+| <K_PARALLEL: "parallel">
+| <K_PARAMETER: "parameter">
+| <K_PARSER: "parser">
+| <K_PARTIAL: "partial">
+| <K_PARTITION: "partition">
+| <K_PASSING: "passing">
+| <K_PASSWORD: "password">
+| <K_PATH: "path">
+| <K_PERIOD: "period">
+| <K_PLACING: "placing">
+| <K_PLAN: "plan">
+| <K_PLANS: "plans">
+| <K_POLICY: "policy">
+| <K_POSITION: "position">
+| <K_PRECEDING: "preceding">
+| <K_PRECISION: "precision">
+| <K_PREPARE: "prepare">
+| <K_PREPARED: "prepared">
+| <K_PRESERVE: "preserve">
+| <K_PRIMARY: "primary">
+| <K_PRIOR: "prior">
+| <K_PRIVILEGES: "privileges">
+| <K_PROCEDURAL: "procedural">
+| <K_PROCEDURE: "procedure">
+| <K_PROCEDURES: "procedures">
+| <K_PROGRAM: "program">
+| <K_PUBLICATION: "publication">
+| <K_QUOTE: "quote">
+| <K_QUOTES: "quotes">
+| <K_RANGE: "range">
+| <K_READ: "read">
+| <K_REAL: "real">
+| <K_REASSIGN: "reassign">
+| <K_RECURSIVE: "recursive">
+| <K_REF: "ref">
+| <K_REFERENCES: "references">
+| <K_REFERENCING: "referencing">
+| <K_REFRESH: "refresh">
+| <K_REINDEX: "reindex">
+| <K_RELATIVE: "relative">
+| <K_RELEASE: "release">
+| <K_RENAME: "rename">
+| <K_REPACK: "repack">
+| <K_REPEATABLE: "repeatable">
+| <K_REPLACE: "replace">
+| <K_REPLICA: "replica">
+| <K_RESET: "reset">
+| <K_RESPECT: "respect">
+| <K_RESTART: "restart">
+| <K_RESTRICT: "restrict">
+| <K_RETURN: "return">
+| <K_RETURNING: "returning">
+| <K_RETURNS: "returns">
+| <K_REVOKE: "revoke">
+| <K_RIGHT: "right">
+| <K_ROLE: "role">
+| <K_ROLLBACK: "rollback">
+| <K_ROLLUP: "rollup">
+| <K_ROUTINE: "routine">
+| <K_ROUTINES: "routines">
+| <K_ROW: "row">
+| <K_ROWS: "rows">
+| <K_RULE: "rule">
+| <K_SAVEPOINT: "savepoint">
+| <K_SCALAR: "scalar">
+| <K_SCHEMA: "schema">
+| <K_SCHEMAS: "schemas">
+| <K_SCROLL: "scroll">
+| <K_SEARCH: "search">
+| <K_SECOND: "second">
+| <K_SECURITY: "security">
+| <K_SELECT: "select">
+| <K_SEQUENCE: "sequence">
+| <K_SEQUENCES: "sequences">
+| <K_SERIALIZABLE: "serializable">
+| <K_SERVER: "server">
+| <K_SESSION: "session">
+| <K_SESSION_USER: "session_user">
+| <K_SET: "set">
+| <K_SETOF: "setof">
+| <K_SETS: "sets">
+| <K_SHARE: "share">
+| <K_SHOW: "show">
+| <K_SIMILAR: "similar">
+| <K_SIMPLE: "simple">
+| <K_SKIP: "skip">
+| <K_SMALLINT: "smallint">
+| <K_SNAPSHOT: "snapshot">
+| <K_SOME: "some">
+| <K_SOURCE: "source">
+| <K_SQL: "sql">
+| <K_STABLE: "stable">
+| <K_STANDALONE: "standalone">
+| <K_START: "start">
+| <K_STATEMENT: "statement">
+| <K_STATISTICS: "statistics">
+| <K_STDIN: "stdin"> { if (dollarTag == null && sawCopy) { sawStdin = true; } }
+| <K_STDOUT: "stdout">
+| <K_STORAGE: "storage">
+| <K_STORED: "stored">
+| <K_STRICT: "strict">
+| <K_STRING: "string">
+| <K_STRIP: "strip">
+| <K_SUBSCRIPTION: "subscription">
+| <K_SUBSTRING: "substring">
+| <K_SUPPORT: "support">
+| <K_SYMMETRIC: "symmetric">
+| <K_SYSID: "sysid">
+| <K_SYSTEM: "system">
+| <K_SYSTEM_USER: "system_user">
+| <K_TABLE: "table">
+| <K_TABLES: "tables">
+| <K_TABLESAMPLE: "tablesample">
+| <K_TABLESPACE: "tablespace">
+| <K_TARGET: "target">
+| <K_TEMP: "temp">
+| <K_TEMPLATE: "template">
+| <K_TEMPORARY: "temporary">
+| <K_TEXT: "text">
+| <K_THEN: "then">
+| <K_TIES: "ties">
+| <K_TIME: "time">
+| <K_TIMESTAMP: "timestamp">
+| <K_TO: "to">
+| <K_TRAILING: "trailing">
+| <K_TRANSACTION: "transaction">
+| <K_TRANSFORM: "transform">
+| <K_TREAT: "treat">
+| <K_TRIGGER: "trigger">
+| <K_TRIM: "trim">
+| <K_TRUE: "true">
+| <K_TRUNCATE: "truncate">
+| <K_TRUSTED: "trusted">
+| <K_TYPE: "type">
+| <K_TYPES: "types">
+| <K_UESCAPE: "uescape">
+| <K_UNBOUNDED: "unbounded">
+| <K_UNCOMMITTED: "uncommitted">
+| <K_UNCONDITIONAL: "unconditional">
+| <K_UNENCRYPTED: "unencrypted">
+| <K_UNION: "union">
+| <K_UNIQUE: "unique">
+| <K_UNKNOWN: "unknown">
+| <K_UNLISTEN: "unlisten">
+| <K_UNLOGGED: "unlogged">
+| <K_UNTIL: "until">
+| <K_UPDATE: "update">
+| <K_USER: "user">
+| <K_USING: "using">
+| <K_VACUUM: "vacuum">
+| <K_VALID: "valid">
+| <K_VALIDATE: "validate">
+| <K_VALIDATOR: "validator">
+| <K_VALUE: "value">
+| <K_VALUES: "values">
+| <K_VARCHAR: "varchar">
+| <K_VARIADIC: "variadic">
+| <K_VARYING: "varying">
+| <K_VERBOSE: "verbose">
+| <K_VERSION: "version">
+| <K_VIEW: "view">
+| <K_VIEWS: "views">
+| <K_VIRTUAL: "virtual">
+| <K_VOLATILE: "volatile">
+| <K_WAIT: "wait">
+| <K_WHEN: "when">
+| <K_WHERE: "where">
+| <K_WHITESPACE: "whitespace">
+| <K_WINDOW: "window">
+| <K_WITH: "with">
+| <K_WITHIN: "within">
+| <K_WITHOUT: "without">
+| <K_WORK: "work">
+| <K_WRAPPER: "wrapper">
+| <K_WRITE: "write">
+| <K_XML: "xml">
+| <K_XMLATTRIBUTES: "xmlattributes">
+| <K_XMLCONCAT: "xmlconcat">
+| <K_XMLELEMENT: "xmlelement">
+| <K_XMLEXISTS: "xmlexists">
+| <K_XMLFOREST: "xmlforest">
+| <K_XMLNAMESPACES: "xmlnamespaces">
+| <K_XMLPARSE: "xmlparse">
+| <K_XMLPI: "xmlpi">
+| <K_XMLROOT: "xmlroot">
+| <K_XMLSERIALIZE: "xmlserialize">
+| <K_XMLTABLE: "xmltable">
+| <K_YEAR: "year">
+| <K_YES: "yes">
+| <K_ZONE: "zone">
+}
+
+/* ---- LITERALS AND IDENTIFIERS ---- */
+
+<DEFAULT, IN_DOLLAR_BODY> TOKEN :
+{
+  <NUMBER:
+      <DIGITS> ("." (<DIGITS>)?)? (<EXPONENT>)?
+    | "." <DIGITS> (<EXPONENT>)?
+    | "0" ["x", "X"] (["0"-"9", "a"-"f", "A"-"F", "_"])+
+    | "0" ["o", "O"] (["0"-"7", "_"])+
+    | "0" ["b", "B"] (["0", "1", "_"])+
+  >
+| <#DIGITS: ["0"-"9"] (["0"-"9", "_"])*>
+| <#EXPONENT: ["e", "E"] (["+", "-"])? <DIGITS>>
+
+  // positional parameter: $1
+| <PARAMETER: "$" (["0"-"9"])+>
+
+  // 'abc'  N'abc'  E'abc\n'  U&'abc'  B'0101'  X'1F'
+| <STRING_LITERAL:
+      (["n", "N"])? "'" (~["'"] | "''")* "'"
+    | ["e", "E"] "'" (~["'", "\\"] | "\\" ~[] | "''")* "'"
+    | ["u", "U"] "&" "'" (~["'"] | "''")* "'"
+    | ["b", "B", "x", "X"] "'" (~["'"])* "'"
+  >
+
+| <QUOTED_IDENTIFIER: (["u", "U"] "&")? "\"" (~["\""] | "\"\"")* "\"">
+
+| <#ID_START: ["a"-"z", "A"-"Z", "_", "\u0080"-"￿"]>
+| <#ID_CONT: ["a"-"z", "A"-"Z", "0"-"9", "_", "$", "\u0080"-"￿"]>
+| <#ID_START_NO_DOLLAR: ["a"-"z", "A"-"Z", "_", "\u0080"-"￿"]>
+| <#ID_CONT_NO_DOLLAR: ["a"-"z", "A"-"Z", "0"-"9", "_", "\u0080"-"￿"]>
+}
+
+<DEFAULT> TOKEN :
+{
+  <IDENTIFIER: <ID_START> (<ID_CONT>)*>
+}
+
+// PostgreSQL searches the raw text for the closing tag of a dollar-quoted string, so the tag closes the string even if
+// it directly follows an identifier, as in "END$$". Therefore, "$" can't continue an identifier inside a body.
+<IN_DOLLAR_BODY> TOKEN :
+{
+  <BODY_IDENTIFIER: <ID_START> (<ID_CONT_NO_DOLLAR>)*>
+}
+
+/* ---- CATCH-ALL ---- */
+
+// Dollar-quoted bodies can be written in any language, and psql command arguments can be anything. Never fail
+// with a lexical error on a stray character.
+<DEFAULT, IN_DOLLAR_BODY> TOKEN :
+{
+  <OTHER: ~[]>
+}
+
+<IN_PSQL_COMMAND> TOKEN :
+{
+  <PSQL_OTHER: ~[]>
+}

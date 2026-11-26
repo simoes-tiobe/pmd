@@ -1456,6 +1456,7 @@
         <module>pmd-perl</module>
         <module>pmd-php</module>
         <module>pmd-plsql</module>
+        <module>pmd-postgresql</module>
         <module>pmd-python</module>
         <module>pmd-ruby</module>
         <module>pmd-rust</module>

@@ -23,6 +23,14 @@ This is a {{ site.pmd.release_type }} release.
 {% tocmaker is_release_notes_processor %}
 
 ### 🚀️ New and noteworthy
+#### New CPD language: PostgreSQL
+CPD can now find duplicated code in PostgreSQL scripts (`--language postgresql`).
+The lexer understands PostgreSQL SQL and PL/pgSQL, including dollar-quoted function bodies and nested block comments,
+as well as `psql` scripts: backslash meta-commands (`\c`, `\d+`, `\set`, `\copy`, ...), `:variable` interpolation
+and the inline data of `COPY ... FROM STDIN`, which is skipped.
+This is a CPD-only language, there are no PMD rules for PostgreSQL.
+See [PostgreSQL support]({{ baseurl }}pmd_languages_postgresql.html).
+
 #### Updated PMD Designer
 This PMD release ships a new version of the pmd-designer.
 PMD's binary distribution now ships ControlsFX 8 for Java 8 and ControlsFX 11 for OpenJFX and Java 11+.

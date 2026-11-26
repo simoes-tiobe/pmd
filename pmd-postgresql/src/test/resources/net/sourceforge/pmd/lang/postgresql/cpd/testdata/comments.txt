@@ -1,0 +1,31 @@
+    [Image] or [Truncated image[            Bcol      Ecol
+L1
+    [select]                                1         7
+    [1]                                     8         9
+    [;]                                     9         10
+L2
+    [select]                                13        19
+    [2]                                     20        21
+    [;]                                     21        22
+L3
+    [select]                                39        45
+    [3]                                     46        47
+    [;]                                     47        48
+L4
+    [select]                                6         12
+    [4]                                     13        14
+    [;]                                     14        15
+L5
+    [select]                                1         7
+    [5]                                     8         9
+L6
+    [+]                                     9         10
+    [6]                                     11        12
+    [;]                                     12        13
+L7
+    [select]                                1         7
+    ['/* not a comment */']                 8         29
+    [,]                                     29        30
+    ['-- neither']                          31        43
+    [;]                                     43        44
+EOF
