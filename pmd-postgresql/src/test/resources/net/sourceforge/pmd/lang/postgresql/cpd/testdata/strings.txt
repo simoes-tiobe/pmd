@@ -1,0 +1,31 @@
+    [Image] or [Truncated image[            Bcol      Ecol
+L1
+    [select]                                1         7
+    ['it''s']                               8         15
+    [,]                                     15        16
+    ['']                                    17        19
+    [,]                                     19        20
+    [E'a\\'b\\n']                           21        30
+    [,]                                     30        31
+    [U&'d\\0061t']                          32        43
+    [,]                                     43        44
+    [B'1010']                               45        52
+    [,]                                     52        53
+    [X'1F']                                 54        59
+    [,]                                     59        60
+    [N'nat']                                61        67
+    [;]                                     67        68
+L2
+    [select]                                1         7
+    ['multi\nline string']                  8         13
+L3
+    [;]                                     13        14
+L4
+    [select]                                1         7
+    ['$$ not a dollar quote $$']            8         34
+    [,]                                     34        35
+    ['-- not a comment']                    36        54
+    [,]                                     54        55
+    ['\\d+ not a command']                  56        75
+    [;]                                     75        76
+EOF

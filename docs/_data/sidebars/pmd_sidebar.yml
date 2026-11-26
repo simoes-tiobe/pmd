@@ -499,6 +499,9 @@ entries:
     - title: PLSQL
       url: /pmd_languages_plsql.html
       output: web, pdf
+    - title: PostgreSQL
+      url: /pmd_languages_postgresql.html
+      output: web, pdf
     - title: Python
       url: /pmd_languages_python.html
       output: web, pdf

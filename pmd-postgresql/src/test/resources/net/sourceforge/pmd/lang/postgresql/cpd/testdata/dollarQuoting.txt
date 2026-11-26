@@ -1,0 +1,106 @@
+    [Image] or [Truncated image[            Bcol      Ecol
+L1
+    [select]                                1         7
+    [$$]                                    8         10
+    [plain]                                 10        15
+    ['quote']                               16        23
+    [body]                                  24        28
+    [$$]                                    29        31
+    [;]                                     31        32
+L2
+    [create]                                1         7
+    [function]                              8         16
+    [f]                                     17        18
+    [(]                                     18        19
+    [)]                                     19        20
+    [returns]                               21        28
+    [int]                                   29        32
+    [as]                                    33        35
+    [$body$]                                36        42
+    [select]                                43        49
+    [1]                                     50        51
+    [$body$]                                52        58
+    [language]                              59        67
+    [sql]                                   68        71
+    [;]                                     71        72
+L3
+    [do]                                    1         3
+    [$outer$]                               4         11
+    [begin]                                 12        17
+    [execute]                               18        25
+    [$inner$]                               26        33
+    [select]                                34        40
+    [1]                                     41        42
+    [$inner$]                               43        50
+    [;]                                     50        51
+    [end]                                   52        55
+    [$outer$]                               56        63
+    [;]                                     63        64
+L4
+    [select]                                1         7
+    [$1]                                    8         10
+    [,]                                     10        11
+    [$2]                                    12        14
+    [,]                                     14        15
+    [$a$]                                   16        19
+    [tag]                                   19        22
+    [$a$]                                   22        25
+    [;]                                     25        26
+L5
+    [create]                                1         7
+    [function]                              8         16
+    [g]                                     17        18
+    [(]                                     18        19
+    [)]                                     19        20
+    [returns]                               21        28
+    [void]                                  29        33
+    [as]                                    34        36
+    [$$]                                    37        39
+L8
+    [\\]                                    3         4
+    [d]                                     4         5
+    [+]                                     5         6
+    [is]                                    7         9
+    [not]                                   10        13
+    [a]                                     14        15
+    [psql]                                  16        20
+    [command]                               21        28
+    [here]                                  29        33
+L9
+    [copy]                                  3         7
+    [x]                                     8         9
+    [from]                                  10        14
+    [stdin]                                 15        20
+    [;]                                     20        21
+L10
+    [$$]                                    1         3
+    [language]                              4         12
+    [plpgsql]                               13        20
+    [;]                                     20        21
+L11
+    [create]                                1         7
+    [function]                              8         16
+    [h]                                     17        18
+    [(]                                     18        19
+    [)]                                     19        20
+    [returns]                               21        28
+    [void]                                  29        33
+    [as]                                    34        36
+    [$$]                                    37        39
+    [begin]                                 40        45
+    [null]                                  46        50
+    [;]                                     50        51
+    [end]                                   52        55
+    [$$]                                    55        57
+    [language]                              58        66
+    [plpgsql]                               67        74
+    [;]                                     74        75
+L12
+    [select]                                1         7
+    [foo$$bar]                              8         16
+    [;]                                     16        17
+L13
+    [select]                                1         7
+    ['after']                               8         15
+    [;]                                     15        16
+EOF
